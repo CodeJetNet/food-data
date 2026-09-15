@@ -25,6 +25,24 @@ JSON file per barcode in `community/products/<gtin13>.json`, validated against
 `community/schema.json`. Values are per 100 g or 100 ml, keyed by the nutrient ids in
 `nutrients.json`.
 
+## Build
+
+`python build.py` downloads the sources into `cache/`, builds every country file into
+`out/` and writes `out/manifest.json`. `--skip-off` leaves Open Food Facts out for fast
+local iteration. Needs Python 3.12+ with `requirements.txt` installed (numpy is only
+there because DuckDB's Python UDFs need it).
+
+USDA CSV shapes the build corrects for, as found in the releases pinned in `sources.json`:
+
+- FNDDS `food_nutrient.nutrient_id` holds the legacy nutrient *number* (208), not the id
+  (1008) that SR Legacy and Foundation use. The build resolves it through each dataset's
+  `nutrient.csv`.
+- FNDDS `food_portion.csv` leaves `amount` empty, puts the whole text in
+  `portion_description` ("1 cup") and a numeric portion code in `modifier`; the code is dropped.
+- Foundation `food.csv` also lists lab sub-samples and acquisitions (with nutrients, and
+  a few `m/d/Y` publication dates). Only `sr_legacy_food`, `survey_fndds_food` and
+  `foundation_food` rows are foods.
+
 ## Files
 
 - `nutrients.json`: the canonical nutrient list. USDA nutrient id, Open Food Facts name, unit, daily target.
