@@ -1,0 +1,9 @@
+{
+  "barcode": "3017620422003",
+  "name": "Nutella",
+  "brand": "Ferrero",
+  "serving_size": 15,
+  "serving_unit": "g",
+  "nutrients": {"1008": 539, "1003": 6.3, "1005": 57.5, "1004": 30.9},
+  "note": "Example entry. Values from the label of the 400 g jar."
+}

@@ -164,6 +164,16 @@ def load_off(con, parquet: str = OFF_PARQUET) -> None:
       WHERE gtin13(r.code) IS NOT NULL AND coalesce(list_extract(list_filter(r.product_name, x -> x.lang = 'main'), 1).text, r.product_name[1].text) IS NOT NULL""")
 
 
+def load_community(con, folder: pathlib.Path) -> None:
+    for path in sorted(folder.glob("*.json")):
+        d = json.loads(path.read_text())
+        n = d["nutrients"]
+        con.execute(f"INSERT INTO staged VALUES ({', '.join('?' * len(STAGED_COLS))})", [
+            d["barcode"], d["name"], d.get("brand"), "community", path.stem, d.get("serving_size"),
+            d.get("serving_unit"), d.get("serving_desc"), d.get("countries") or list(COUNTRIES), None,
+            *[n.get(str(i)) for i in PANEL_IDS]])
+
+
 def merge(con) -> None:
     """One row per barcode and one per generic name: source precedence, then newest publication
     (USDA Branded issues a new fdc_id on every relabel), then the plausibility rule. Result table: merged."""
@@ -238,7 +248,7 @@ def main(argv: list[str]) -> None:
     load_usda_branded(con, fetch(SOURCES["usda_branded"], cache))
     if "--skip-off" not in argv:
         load_off(con)
-    # Task 1.7 adds: load_community
+    load_community(con, ROOT / "community" / "products")
     merge(con)
     files = []
     for country in [*COUNTRIES, "starter"]:   # "starter" is the small generic-only file the app embeds
