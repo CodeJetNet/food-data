@@ -51,3 +51,14 @@ USDA CSV shapes the build corrects for, as found in the releases pinned in `sour
 - `countries.json`: country code to Open Food Facts country tag.
 - `sources.json`: USDA download URLs. Update by hand when USDA publishes a new release.
 - `schema/`: the SQLite schema, versioned.
+
+## License
+
+The database, every `foods-*.zip` this repo publishes, is licensed under the
+[Open Database License (ODbL) 1.0](LICENSE), because Open Food Facts is. The build
+scripts are [MIT](LICENSE-CODE).
+
+Every database file carries this attribution in its `meta` table under the key
+`attribution`, and anything built on the data must keep it:
+
+> Open Food Facts (ODbL, https://world.openfoodfacts.org), USDA FoodData Central (public domain, https://fdc.nal.usda.gov)
