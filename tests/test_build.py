@@ -113,6 +113,13 @@ def test_precedence_prefers_usda_branded_over_off(tmp_path):
     build.merge(con)
     assert con.execute("SELECT name FROM merged").fetchall() == [("PEANUT BUTTER, CREAMY",)]
 
+def test_small_negative_macro_clamped_to_zero(tmp_path):
+    # USDA's carbohydrate by difference comes out slightly negative on some meats: clamp, do not drop
+    con = build.connect(tmp_path)
+    con.execute("INSERT INTO staged (name, source, source_id, n1008, n1003, n1005, n1004) VALUES ('Chicken, breast, meat and skin, raw', 'usda_foundation', '1', 132.8, 21.4, -0.43, 4.78)")
+    build.merge(con)
+    assert con.execute("SELECT name, n1005 FROM merged").fetchall() == [("Chicken, breast, meat and skin, raw", 0.0)]
+
 def make_fndds_fixture(root):
     # FNDDS 2024-10-31: food_nutrient.nutrient_id holds the nutrient *number* (208), portions carry the text
     # in portion_description with a numeric FNDDS code in modifier and an empty amount

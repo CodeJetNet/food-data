@@ -168,6 +168,9 @@ def merge(con) -> None:
     """One row per barcode and one per generic name: source precedence, then newest publication
     (USDA Branded issues a new fdc_id on every relabel), then the plausibility rule. Result table: merged."""
     prec = " ".join(f"WHEN '{k}' THEN {v}" for k, v in PRECEDENCE.items())
+    # USDA's carbohydrate by difference comes out slightly negative on some meats; a rounding artifact, not a bad row
+    con.execute("UPDATE staged SET " + ", ".join(
+        f"n{i} = CASE WHEN n{i} BETWEEN -1 AND 0 THEN 0 ELSE n{i} END" for i in PANEL_IDS))
     con.execute(f"""
       CREATE OR REPLACE TABLE merged AS
       SELECT {", ".join(STAGED_COLS)} FROM (

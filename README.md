@@ -42,6 +42,8 @@ USDA CSV shapes the build corrects for, as found in the releases pinned in `sour
 - Foundation `food.csv` also lists lab sub-samples and acquisitions (with nutrients, and
   a few `m/d/Y` publication dates). Only `sr_legacy_food`, `survey_fndds_food` and
   `foundation_food` rows are foods.
+- Carbohydrate by difference comes out slightly negative on some Foundation meats
+  (-0.43 g). Panel values between -1 and 0 are clamped to 0 before the plausibility rule.
 
 ## Files
 
