@@ -16,7 +16,8 @@ ALT_IDS = [int(a[0]) for n in PANEL for a in n.get("alt", [])]   # folded into t
 COUNTRIES = json.loads((ROOT / "countries.json").read_text())
 SOURCES = json.loads((ROOT / "sources.json").read_text())
 SCHEMA_VERSION = 1
-OFF_PARQUET = "hf://datasets/openfoodfacts/product-database/food.parquet"
+# One plain GET. Anonymous hf:// range reads get HTTP 429 from Hugging Face after about a minute (Task 0.2).
+OFF_PARQUET = "https://huggingface.co/datasets/openfoodfacts/product-database/resolve/main/food.parquet"
 # Barcoded rows: first source wins. Generic rows sharing a name: Foundation, then SR Legacy, then FNDDS.
 PRECEDENCE = {"community": 0, "usda_branded": 1, "off": 2, "usda_foundation": 3, "usda_sr": 4, "usda_fndds": 5}
 CHUNK = 50_000
@@ -38,12 +39,18 @@ def connect(workdir: pathlib.Path) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def fetch(url: str, cache: pathlib.Path) -> pathlib.Path:
+def download(url: str, cache: pathlib.Path) -> pathlib.Path:
     cache.mkdir(exist_ok=True)
     dest = cache / url.rsplit("/", 1)[1]
     if not dest.exists():
         print("download", url, file=sys.stderr)
         urllib.request.urlretrieve(url, dest)
+    return dest
+
+
+def fetch(url: str, cache: pathlib.Path) -> pathlib.Path:
+    """A USDA zip: download, unzip, return the folder holding the CSVs."""
+    dest = download(url, cache)
     folder = dest.with_suffix("")
     if not folder.exists():
         zipfile.ZipFile(dest).extractall(folder)
@@ -119,6 +126,44 @@ def load_usda_branded(con, folder: pathlib.Path) -> None:
       WHERE gtin13(b.gtin_upc) IS NOT NULL""")
 
 
+def load_off(con, parquet: str = OFF_PARQUET) -> None:
+    if parquet.startswith("http"):
+        parquet = str(download(parquet, ROOT / "cache"))
+    con.execute("CREATE OR REPLACE TEMP TABLE country_map(tag VARCHAR, cc VARCHAR)")
+    con.executemany("INSERT INTO country_map VALUES (?, ?)", [(tag, cc) for cc, tag in COUNTRIES.items()])
+    con.execute(f"""
+      CREATE OR REPLACE TEMP VIEW off_raw AS
+      SELECT code, product_name, brands, countries_tags, TRY_CAST(serving_quantity AS DOUBLE) AS serving_quantity, serving_size, nutriments
+      FROM read_parquet('{parquet}')
+      WHERE len(nutriments) > 0 AND len(countries_tags) > 0""")
+    con.execute("""
+      CREATE OR REPLACE TEMP TABLE off_countries AS
+      SELECT r.code, list(DISTINCT m.cc) AS countries
+      FROM off_raw r, unnest(r.countries_tags) AS t(tag) JOIN country_map m ON m.tag = t.tag
+      GROUP BY r.code""")
+    def col(n):
+        v = f"""max(CASE WHEN name = '{n["off"]}' THEN "100g" * {n["off_factor"]} END)"""
+        if n["id"] == "1008":   # kilojoules-only products: OFF's `energy` and `energy-kj` are both kJ
+            v = f"""coalesce({v}, max(CASE WHEN name IN ('energy-kj', 'energy') THEN "100g" / 4.184 END))"""
+        return f"{v} AS n{n['id']}"
+    off_pivot = ",\n".join(col(n) for n in PANEL if n["off"])
+    missing = [f"NULL AS n{n['id']}" for n in PANEL if not n["off"]]
+    con.execute(f"""
+      CREATE OR REPLACE TEMP TABLE off_nut AS
+      SELECT code, {off_pivot}{"," if missing else ""} {", ".join(missing)}
+      FROM (SELECT code, unnest(nutriments, recursive := true) FROM off_raw)
+      GROUP BY code""")
+    con.execute(f"""
+      INSERT INTO staged
+      SELECT gtin13(r.code),
+             coalesce(list_extract(list_filter(r.product_name, x -> x.lang = 'main'), 1).text, r.product_name[1].text),
+             nullif(r.brands, ''), 'off', r.code, r.serving_quantity,
+             CASE WHEN r.serving_quantity IS NOT NULL THEN 'g' END, nullif(r.serving_size, ''), c.countries, NULL,
+             {", ".join(f"n.n{i}" for i in PANEL_IDS)}
+      FROM off_raw r JOIN off_countries c USING (code) JOIN off_nut n USING (code)
+      WHERE gtin13(r.code) IS NOT NULL AND coalesce(list_extract(list_filter(r.product_name, x -> x.lang = 'main'), 1).text, r.product_name[1].text) IS NOT NULL""")
+
+
 def merge(con) -> None:
     """One row per barcode and one per generic name: source precedence, then newest publication
     (USDA Branded issues a new fdc_id on every relabel), then the plausibility rule. Result table: merged."""
@@ -188,7 +233,9 @@ def main(argv: list[str]) -> None:
     for key in ("usda_sr", "usda_fndds", "usda_foundation"):
         load_usda_generic(con, key, fetch(SOURCES[key], cache))
     load_usda_branded(con, fetch(SOURCES["usda_branded"], cache))
-    # Tasks 1.6 and 1.7 add: load_off, load_community
+    if "--skip-off" not in argv:
+        load_off(con)
+    # Task 1.7 adds: load_community
     merge(con)
     files = []
     for country in [*COUNTRIES, "starter"]:   # "starter" is the small generic-only file the app embeds

@@ -1,4 +1,5 @@
 import sqlite3, pathlib, csv
+import duckdb
 import build
 
 def write_csv(path, header, rows):
@@ -80,6 +81,37 @@ def test_branded_build(tmp_path):
     # and never in the starter, which has no barcodes
     build.write_sqlite(con, "US", tmp_path / "starter.db", starter=True)
     assert sqlite3.connect(tmp_path / "starter.db").execute("SELECT count(*) FROM foods").fetchone()[0] == 0
+
+def make_off_fixture(root):
+    p = root / "off.parquet"
+    # serving_quantity is VARCHAR in the real Parquet (Task 0.2), so the fixture carries it as a string
+    duckdb.connect().execute(f"""
+      COPY (SELECT * FROM (VALUES
+        ('3017620422003', [{{'lang': 'main', 'text': 'Nutella'}}], 'Ferrero', ['en:france', 'en:united-states'], '15.0', '15 g',
+         [{{'name': 'energy-kcal', '100g': 539.0}}, {{'name': 'proteins', '100g': 6.3}}, {{'name': 'carbohydrates', '100g': 57.5}},
+          {{'name': 'fat', '100g': 30.9}}, {{'name': 'sodium', '100g': 0.043}}]),
+        ('96385074', [{{'lang': 'main', 'text': 'Mystery snack'}}], NULL, ['en:germany'], NULL, NULL,
+         [{{'name': 'energy-kj', '100g': 1674.0}}])      -- kilojoules only, as many European products are
+      ) t(code, product_name, brands, countries_tags, serving_quantity, serving_size, nutriments)) TO '{p}' (FORMAT PARQUET)""")
+    return p
+
+def test_off_build(tmp_path):
+    con = build.connect(tmp_path)
+    build.load_off(con, str(make_off_fixture(tmp_path)))
+    build.merge(con)
+    build.write_sqlite(con, "US", tmp_path / "us.db")
+    build.write_sqlite(con, "DE", tmp_path / "de.db")
+    us = sqlite3.connect(tmp_path / "us.db").execute("SELECT barcode, name, brand, serving_size, n1008, n1093 FROM foods").fetchall()
+    assert us == [("3017620422003", "Nutella", "Ferrero", 15.0, 539.0, 43.0)]      # sodium g -> mg
+    de = sqlite3.connect(tmp_path / "de.db").execute("SELECT barcode, name, round(n1008) FROM foods").fetchall()
+    assert de == [("0000096385074", "Mystery snack", 400.0)]      # 1674 kJ / 4.184
+
+def test_precedence_prefers_usda_branded_over_off(tmp_path):
+    con = build.connect(tmp_path)
+    build.load_usda_branded(con, make_branded_fixture(tmp_path))
+    con.execute("INSERT INTO staged (barcode, name, source, source_id, countries, n1008, n1003, n1005, n1004) VALUES ('0012345678905', 'OFF duplicate', 'off', 'x', ['US'], 500, 20, 20, 40)")
+    build.merge(con)
+    assert con.execute("SELECT name FROM merged").fetchall() == [("PEANUT BUTTER, CREAMY",)]
 
 def make_fndds_fixture(root):
     # FNDDS 2024-10-31: food_nutrient.nutrient_id holds the nutrient *number* (208), portions carry the text
