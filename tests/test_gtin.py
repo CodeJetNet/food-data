@@ -28,6 +28,10 @@ def test_upc_e_expands():
     assert expand_upc_e("01234572") == "012345000072"
     assert normalize("04252614", symbology="upc_e") == "0042100005264"
 
+def test_eight_digits_without_hint():
+    assert normalize("04252614") == "0042100005264"    # fails the EAN-8 check digit, so it is UPC-E
+    assert normalize("96385074") == "0000096385074"    # a valid EAN-8 stays EAN-8
+
 def test_all_zeros_is_not_a_barcode():
     assert normalize("0000000000000") is None
     assert normalize("00000000") is None

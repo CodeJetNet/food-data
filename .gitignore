@@ -1,4 +1,5 @@
 .venv/
 cache/
 out/
+tmp/
 __pycache__/
