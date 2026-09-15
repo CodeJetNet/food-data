@@ -4,6 +4,7 @@ on:
     - cron: "0 6 * * 1"        # Mondays 06:00 UTC
   push:
     branches: [main]
+    paths-ignore: ["**.md", "LICENSE*"]
   workflow_dispatch:
 concurrency: build
 jobs:
@@ -19,11 +20,11 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: actions/cache@v4
         with:
-          path: cache
+          path: cache/*.zip
           key: usda-${{ hashFiles('sources.json') }}
-      - run: rm -f cache/food.parquet   # the key only changes with sources.json; Open Food Facts must be fresh every week
       - run: echo "RELEASE_TAG=data-$(date -u +%Y%m%d)-${{ github.run_number }}" >> "$GITHUB_ENV"
       - run: pytest -q --ignore=tests/test_smoke.py
+      - run: python community.py
       - run: python build.py            # manifest URLs point at builds/$RELEASE_TAG on the CDN, mirrors at the release
         env:
           CDN_URL: ${{ vars.CDN_URL }}
@@ -36,7 +37,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
           R2: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
-          aws s3 cp out/ "s3://food-data/builds/$RELEASE_TAG/" --recursive --exclude manifest.json \
+          aws s3 cp out/ "s3://food-data/builds/$RELEASE_TAG/" --recursive --exclude "*" --include "*.zip" \
             --endpoint-url "$R2" --cache-control "public, max-age=31536000, immutable"
       - name: Mirror to a GitHub Release
         env:
@@ -60,7 +61,7 @@ jobs:
           R2: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           GH_TOKEN: ${{ github.token }}
         run: |
-          aws s3 ls s3://food-data/builds/ --endpoint-url "$R2" | awk '{print $2}' | sed 's#/$##' | sort -r | tail -n +3 \
+          aws s3 ls s3://food-data/builds/ --endpoint-url "$R2" | awk '{print $2}' | sed 's#/$##' | sort -rV | tail -n +3 \
             | xargs -r -I{} aws s3 rm "s3://food-data/builds/{}/" --recursive --endpoint-url "$R2"
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^data-' | tail -n +3 \
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^data-' | sort -rV | tail -n +3 \
             | xargs -r -n1 gh release delete --yes --cleanup-tag
