@@ -3,7 +3,7 @@
   python build.py                 full build into out/
   python build.py --skip-off      USDA and community only (fast local iteration)
 """
-import datetime, hashlib, json, os, pathlib, sqlite3, sys, urllib.request, zipfile
+import datetime, hashlib, json, os, pathlib, shutil, sqlite3, sys, urllib.request, zipfile
 import duckdb
 from gtin import normalize
 from rules import PLAUSIBLE
@@ -44,7 +44,9 @@ def download(url: str, cache: pathlib.Path) -> pathlib.Path:
     dest = cache / url.rsplit("/", 1)[1]
     if not dest.exists():
         print("download", url, file=sys.stderr)
-        urllib.request.urlretrieve(url, dest)
+        part = dest.with_suffix(".part")   # an interrupted download must not pass as complete on the next run
+        urllib.request.urlretrieve(url, part)
+        part.rename(dest)
     return dest
 
 
@@ -133,7 +135,9 @@ def load_off(con, parquet: str = OFF_PARQUET) -> None:
     con.executemany("INSERT INTO country_map VALUES (?, ?)", [(tag, cc) for cc, tag in COUNTRIES.items()])
     con.execute(f"""
       CREATE OR REPLACE TEMP VIEW off_raw AS
-      SELECT code, product_name, brands, countries_tags, TRY_CAST(serving_quantity AS DOUBLE) AS serving_quantity, serving_size, nutriments
+      SELECT code,
+             nullif(coalesce(list_extract(list_filter(product_name, x -> x.lang = 'main'), 1).text, product_name[1].text), '') AS name,
+             brands, countries_tags, TRY_CAST(serving_quantity AS DOUBLE) AS serving_quantity, serving_size, nutriments
       FROM read_parquet('{parquet}')
       WHERE len(nutriments) > 0 AND len(countries_tags) > 0""")
     con.execute("""
@@ -155,13 +159,11 @@ def load_off(con, parquet: str = OFF_PARQUET) -> None:
       GROUP BY code""")
     con.execute(f"""
       INSERT INTO staged
-      SELECT gtin13(r.code),
-             coalesce(list_extract(list_filter(r.product_name, x -> x.lang = 'main'), 1).text, r.product_name[1].text),
-             nullif(r.brands, ''), 'off', r.code, r.serving_quantity,
+      SELECT gtin13(r.code), r.name, nullif(r.brands, ''), 'off', r.code, r.serving_quantity,
              CASE WHEN r.serving_quantity IS NOT NULL THEN 'g' END, nullif(r.serving_size, ''), c.countries, NULL,
              {", ".join(f"n.n{i}" for i in PANEL_IDS)}
       FROM off_raw r JOIN off_countries c USING (code) JOIN off_nut n USING (code)
-      WHERE gtin13(r.code) IS NOT NULL AND coalesce(list_extract(list_filter(r.product_name, x -> x.lang = 'main'), 1).text, r.product_name[1].text) IS NOT NULL""")
+      WHERE gtin13(r.code) IS NOT NULL AND r.name IS NOT NULL""")
 
 
 def load_community(con, folder: pathlib.Path) -> None:
@@ -175,20 +177,26 @@ def load_community(con, folder: pathlib.Path) -> None:
 
 
 def merge(con) -> None:
-    """One row per barcode and one per generic name: source precedence, then newest publication
-    (USDA Branded issues a new fdc_id on every relabel), then the plausibility rule. Result table: merged."""
+    """One row per barcode and one per generic name. The plausibility rule goes first so an implausible newest
+    label cannot shadow an older good one; then source precedence, newest publication (USDA Branded issues a new
+    fdc_id on every relabel) and source_id so ties are reproducible. The winner carries the countries of every
+    source that knows the product. Result table: merged."""
     prec = " ".join(f"WHEN '{k}' THEN {v}" for k, v in PRECEDENCE.items())
+    key = "coalesce(barcode, 'name:' || lower(name))"
     # USDA's carbohydrate by difference comes out slightly negative on some meats; a rounding artifact, not a bad row
     con.execute("UPDATE staged SET " + ", ".join(
         f"n{i} = CASE WHEN n{i} BETWEEN -1 AND 0 THEN 0 ELSE n{i} END" for i in PANEL_IDS))
     con.execute(f"""
       CREATE OR REPLACE TABLE merged AS
       SELECT {", ".join(STAGED_COLS)} FROM (
-        SELECT *, row_number() OVER (
-          PARTITION BY coalesce(barcode, 'name:' || lower(name))
-          ORDER BY CASE source {prec} ELSE 9 END, published DESC NULLS LAST) AS rn
+        SELECT * EXCLUDE (countries),
+               list_distinct(flatten(list(countries) OVER (PARTITION BY {key}))) AS countries,
+               row_number() OVER (
+                 PARTITION BY {key}
+                 ORDER BY CASE source {prec} ELSE 9 END, published DESC NULLS LAST, source_id DESC) AS rn
         FROM staged
-      ) WHERE rn = 1 AND {PLAUSIBLE}""")
+        WHERE {PLAUSIBLE}
+      ) WHERE rn = 1""")
 
 
 def schema_sql() -> str:
@@ -231,17 +239,15 @@ def write_sqlite(con, country: str | None, out: pathlib.Path, starter: bool = Fa
 
 
 def md5(path: pathlib.Path) -> str:
-    h = hashlib.md5()
     with open(path, "rb") as f:
-        while chunk := f.read(1 << 20):
-            h.update(chunk)
-    return h.hexdigest()
+        return hashlib.file_digest(f, "md5").hexdigest()
 
 
 def main(argv: list[str]) -> None:
     root = ROOT
     cache, out = root / "cache", root / "out"
-    out.mkdir(exist_ok=True)
+    shutil.rmtree(out, ignore_errors=True)   # a failed run must not leave last run's zips next to a half-written db
+    out.mkdir()
     con = connect(root)
     for key in ("usda_sr", "usda_fndds", "usda_foundation"):
         load_usda_generic(con, key, fetch(SOURCES[key], cache))
@@ -253,7 +259,7 @@ def main(argv: list[str]) -> None:
     files = []
     for country in [*COUNTRIES, "starter"]:   # "starter" is the small generic-only file the app embeds
         db = out / f"foods-{country}.db"
-        write_sqlite(con, country, db, starter=country == "starter")
+        write_sqlite(con, None if country == "starter" else country, db, starter=country == "starter")
         zip_path = db.with_suffix(".zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             z.write(db, db.name)

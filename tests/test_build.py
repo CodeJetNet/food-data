@@ -53,17 +53,21 @@ def test_generic_build(tmp_path):
 
 def make_branded_fixture(root):
     d = root / "usda_branded"; d.mkdir(parents=True)
-    # the same GTIN twice: USDA issues a new fdc_id on every relabel, and the newest must win
+    # the same GTIN three times: USDA issues a new fdc_id on every relabel and the newest plausible label must
+    # win, so the old label is listed first and the newest one has macros that fail the plausibility rule
     write_csv(d / "food.csv", ["fdc_id", "data_type", "description", "food_category_id", "publication_date"],
-              [[10, "branded_food", "PEANUT BUTTER, CREAMY", None, "2025-12-01"],
-               [11, "branded_food", "PEANUT BUTTER CREAMY (OLD LABEL)", None, "2021-03-01"]])
+              [[11, "branded_food", "PEANUT BUTTER CREAMY (OLD LABEL)", None, "2021-03-01"],
+               [10, "branded_food", "PEANUT BUTTER, CREAMY", None, "2025-12-01"],
+               [12, "branded_food", "PEANUT BUTTER, CREAMY (BAD LABEL)", None, "2026-03-01"]])
     write_csv(d / "branded_food.csv", ["fdc_id", "brand_owner", "brand_name", "gtin_upc", "ingredients", "serving_size", "serving_size_unit", "household_serving_fulltext"],
-              [[10, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"],
-               [11, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"]])
+              [[11, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"],
+               [10, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"],
+               [12, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"]])
     write_csv(d / "food_nutrient.csv", ["id", "fdc_id", "nutrient_id", "amount"],
-              [[1, 10, 1008, 588], [2, 10, 1003, 25], [3, 10, 1005, 20], [4, 10, 1004, 50],
-               [5, 11, 1008, 588], [6, 11, 1003, 25], [7, 11, 1005, 20], [8, 11, 1004, 50],
-               [9, 10, 1104, 300]])                      # vitamin A in IU: an alt id, lands in n1106 as 90 µg
+              [[1, 11, 1008, 588], [2, 11, 1003, 25], [3, 11, 1005, 20], [4, 11, 1004, 50],
+               [5, 10, 1008, 588], [6, 10, 1003, 25], [7, 10, 1005, 20], [8, 10, 1004, 50],
+               [9, 10, 1104, 300], [10, 10, 1106, 80],   # vitamin A: the primary id (80 µg) wins over the 300 IU alt
+               [11, 12, 1008, 100], [12, 12, 1003, 30], [13, 12, 1005, 30], [14, 12, 1004, 30]])   # 510 kcal implied
     return d
 
 def test_branded_build(tmp_path):
@@ -74,7 +78,7 @@ def test_branded_build(tmp_path):
     build.write_sqlite(con, "US", out)
     db = sqlite3.connect(out)
     rows = db.execute("SELECT barcode, name, brand, serving_size, serving_unit, serving_desc, n1008, n1106 FROM foods").fetchall()
-    assert rows == [("0012345678905", "PEANUT BUTTER, CREAMY", "ACME", 32.0, "g", "2 Tbsp (32 g)", 588.0, 90.0)]
+    assert rows == [("0012345678905", "PEANUT BUTTER, CREAMY", "ACME", 32.0, "g", "2 Tbsp (32 g)", 588.0, 80.0)]
     # not in the CA file
     build.write_sqlite(con, "CA", tmp_path / "foods-CA.db")
     assert sqlite3.connect(tmp_path / "foods-CA.db").execute("SELECT count(*) FROM foods").fetchone()[0] == 0
@@ -91,7 +95,9 @@ def make_off_fixture(root):
          [{{'name': 'energy-kcal', '100g': 539.0}}, {{'name': 'proteins', '100g': 6.3}}, {{'name': 'carbohydrates', '100g': 57.5}},
           {{'name': 'fat', '100g': 30.9}}, {{'name': 'sodium', '100g': 0.043}}]),
         ('96385074', [{{'lang': 'main', 'text': 'Mystery snack'}}], NULL, ['en:germany'], NULL, NULL,
-         [{{'name': 'energy-kj', '100g': 1674.0}}])      -- kilojoules only, as many European products are
+         [{{'name': 'energy-kj', '100g': 1674.0}}]),     -- kilojoules only, as many European products are
+        ('4006381333931', [{{'lang': 'main', 'text': ''}}], 'Nameless', ['en:united-states'], NULL, NULL,
+         [{{'name': 'energy-kcal', '100g': 100.0}}])     -- an empty name is no name
       ) t(code, product_name, brands, countries_tags, serving_quantity, serving_size, nutriments)) TO '{p}' (FORMAT PARQUET)""")
     return p
 
@@ -112,6 +118,16 @@ def test_precedence_prefers_usda_branded_over_off(tmp_path):
     con.execute("INSERT INTO staged (barcode, name, source, source_id, countries, n1008, n1003, n1005, n1004) VALUES ('0012345678905', 'OFF duplicate', 'off', 'x', ['US'], 500, 20, 20, 40)")
     build.merge(con)
     assert con.execute("SELECT name FROM merged").fetchall() == [("PEANUT BUTTER, CREAMY",)]
+
+def test_winner_carries_every_source_country(tmp_path):
+    # USDA Branded knows the product in the US, Open Food Facts in France: it belongs in both files
+    con = build.connect(tmp_path)
+    build.load_usda_branded(con, make_branded_fixture(tmp_path))
+    con.execute("INSERT INTO staged (barcode, name, source, source_id, countries, n1008, n1003, n1005, n1004) VALUES ('0012345678905', 'Beurre de cacahuète', 'off', 'x', ['FR'], 588, 25, 20, 50)")
+    build.merge(con)
+    for cc in ("US", "FR"):
+        build.write_sqlite(con, cc, tmp_path / f"{cc}.db")
+        assert sqlite3.connect(tmp_path / f"{cc}.db").execute("SELECT name FROM foods").fetchall() == [("PEANUT BUTTER, CREAMY",)], cc
 
 def test_small_negative_macro_clamped_to_zero(tmp_path):
     # USDA's carbohydrate by difference comes out slightly negative on some meats: clamp, do not drop
