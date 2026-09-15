@@ -16,7 +16,8 @@ def test_us_file_is_populated():
 @pytest.mark.skipif(os.environ.get("SKIP_OFF") == "1", reason="built without Open Food Facts")
 def test_fr_file_has_open_food_facts():
     db = sqlite3.connect(DB.with_name("foods-FR.db"))
-    assert db.execute("SELECT count(*) FROM foods WHERE barcode IS NOT NULL").fetchone()[0] > 100_000
+    n = db.execute("SELECT count(*) FROM foods WHERE barcode IS NOT NULL").fetchone()[0]
+    assert n > 100_000, "no Open Food Facts rows in foods-FR.db; for a --skip-off build run pytest with SKIP_OFF=1"
 
 def test_starter_fits_in_the_app():
     assert (DB.parent / "foods-starter.zip").stat().st_size < 10 * 1024 * 1024

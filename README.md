@@ -52,6 +52,8 @@ USDA CSV shapes the build corrects for, as found in the releases pinned in `sour
 - `sources.json`: USDA download URLs. Update by hand when USDA publishes a new release.
 - `schema/`: the SQLite schema, versioned.
 
+A `python build.py --skip-off` build has no Open Food Facts rows, so run the tests with `SKIP_OFF=1 pytest -q` afterwards; the France smoke test only makes sense against a full build.
+
 ## License
 
 The database, every `foods-*.zip` this repo publishes, is licensed under the
