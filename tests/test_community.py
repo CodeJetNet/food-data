@@ -30,3 +30,8 @@ def test_community_overrides_everything(tmp_path):
     build.load_community(con, d)
     build.merge(con)
     assert con.execute("SELECT name, source FROM merged").fetchall() == [("Nutella", "community")]
+
+def test_unknown_nutrient_id(tmp_path):
+    bad = dict(GOOD, nutrients={**GOOD["nutrients"], "9999": 1})
+    p = tmp_path / "3017620422003.json"; p.write_text(json.dumps(bad))
+    assert any("unknown nutrient ids ['9999']" in e for e in community.validate_file(p))
