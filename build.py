@@ -100,6 +100,25 @@ def load_usda_generic(con, source: str, folder: pathlib.Path) -> None:
       WHERE p.gram_weight > 0""")
 
 
+def load_usda_branded(con, folder: pathlib.Path) -> None:
+    con.execute(f"""
+      CREATE OR REPLACE TEMP TABLE nut AS
+      SELECT fdc_id, {panel_pivot('nutrient_id', 'amount')}
+      FROM read_csv('{folder}/food_nutrient.csv', header = true)
+      GROUP BY fdc_id""")
+    con.execute(f"""
+      INSERT INTO staged
+      SELECT gtin13(b.gtin_upc), f.description, coalesce(nullif(b.brand_name, ''), b.brand_owner), 'usda_branded',
+             CAST(f.fdc_id AS VARCHAR), b.serving_size,
+             CASE lower(b.serving_size_unit) WHEN 'grm' THEN 'g' WHEN 'g' THEN 'g' WHEN 'mlt' THEN 'ml' WHEN 'ml' THEN 'ml' END,
+             nullif(b.household_serving_fulltext, ''), ['US'], CAST(f.publication_date AS VARCHAR),
+             {", ".join(f"n{i}" for i in PANEL_IDS)}
+      FROM read_csv('{folder}/food.csv', header = true) f
+      JOIN read_csv('{folder}/branded_food.csv', header = true, all_varchar = false) b USING (fdc_id)
+      JOIN nut USING (fdc_id)
+      WHERE gtin13(b.gtin_upc) IS NOT NULL""")
+
+
 def merge(con) -> None:
     """One row per barcode and one per generic name: source precedence, then newest publication
     (USDA Branded issues a new fdc_id on every relabel), then the plausibility rule. Result table: merged."""
@@ -168,7 +187,8 @@ def main(argv: list[str]) -> None:
     con = connect(root)
     for key in ("usda_sr", "usda_fndds", "usda_foundation"):
         load_usda_generic(con, key, fetch(SOURCES[key], cache))
-    # Tasks 1.5 to 1.7 add: load_usda_branded, load_off, load_community
+    load_usda_branded(con, fetch(SOURCES["usda_branded"], cache))
+    # Tasks 1.6 and 1.7 add: load_off, load_community
     merge(con)
     files = []
     for country in [*COUNTRIES, "starter"]:   # "starter" is the small generic-only file the app embeds

@@ -50,6 +50,37 @@ def test_generic_build(tmp_path):
     assert s.execute("SELECT count(*) FROM food_nutrients_extra").fetchone()[0] == 0     # no long tail in the starter
     assert db.execute("SELECT value FROM meta WHERE key = 'schemaVersion'").fetchone()[0] == "1"
 
+def make_branded_fixture(root):
+    d = root / "usda_branded"; d.mkdir(parents=True)
+    # the same GTIN twice: USDA issues a new fdc_id on every relabel, and the newest must win
+    write_csv(d / "food.csv", ["fdc_id", "data_type", "description", "food_category_id", "publication_date"],
+              [[10, "branded_food", "PEANUT BUTTER, CREAMY", None, "2025-12-01"],
+               [11, "branded_food", "PEANUT BUTTER CREAMY (OLD LABEL)", None, "2021-03-01"]])
+    write_csv(d / "branded_food.csv", ["fdc_id", "brand_owner", "brand_name", "gtin_upc", "ingredients", "serving_size", "serving_size_unit", "household_serving_fulltext"],
+              [[10, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"],
+               [11, "Acme Foods", "ACME", "012345678905", "PEANUTS", 32, "GRM", "2 Tbsp (32 g)"]])
+    write_csv(d / "food_nutrient.csv", ["id", "fdc_id", "nutrient_id", "amount"],
+              [[1, 10, 1008, 588], [2, 10, 1003, 25], [3, 10, 1005, 20], [4, 10, 1004, 50],
+               [5, 11, 1008, 588], [6, 11, 1003, 25], [7, 11, 1005, 20], [8, 11, 1004, 50],
+               [9, 10, 1104, 300]])                      # vitamin A in IU: an alt id, lands in n1106 as 90 µg
+    return d
+
+def test_branded_build(tmp_path):
+    con = build.connect(tmp_path)
+    build.load_usda_branded(con, make_branded_fixture(tmp_path))
+    build.merge(con)
+    out = tmp_path / "foods-US.db"
+    build.write_sqlite(con, "US", out)
+    db = sqlite3.connect(out)
+    rows = db.execute("SELECT barcode, name, brand, serving_size, serving_unit, serving_desc, n1008, n1106 FROM foods").fetchall()
+    assert rows == [("0012345678905", "PEANUT BUTTER, CREAMY", "ACME", 32.0, "g", "2 Tbsp (32 g)", 588.0, 90.0)]
+    # not in the CA file
+    build.write_sqlite(con, "CA", tmp_path / "foods-CA.db")
+    assert sqlite3.connect(tmp_path / "foods-CA.db").execute("SELECT count(*) FROM foods").fetchone()[0] == 0
+    # and never in the starter, which has no barcodes
+    build.write_sqlite(con, "US", tmp_path / "starter.db", starter=True)
+    assert sqlite3.connect(tmp_path / "starter.db").execute("SELECT count(*) FROM foods").fetchone()[0] == 0
+
 def make_fndds_fixture(root):
     # FNDDS 2024-10-31: food_nutrient.nutrient_id holds the nutrient *number* (208), portions carry the text
     # in portion_description with a numeric FNDDS code in modifier and an empty amount
