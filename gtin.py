@@ -1,7 +1,9 @@
-"""GTIN-13 normalization. Every barcode in the database is a 13-digit string."""
+"""GTIN-13 normalization. Every barcode in the database is a 13-digit string.
+
+An 8-digit code without a symbology hint is treated as EAN-8, which is what USDA gtin_upc needs."""
 
 def valid(d: str) -> bool:
-    if len(d) != 13 or not d.isdigit():
+    if len(d) != 13 or not (d.isascii() and d.isdigit()):
         return False
     s = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(d[:12]))
     return (10 - s % 10) % 10 == int(d[12])
@@ -23,11 +25,13 @@ def expand_upc_e(d: str) -> str:
 def normalize(code: str | None, symbology: str | None = None) -> str | None:
     if not code:
         return None
-    d = "".join(ch for ch in code if ch.isdigit())
+    d = "".join(ch for ch in code if ch.isascii() and ch.isdigit())
     if symbology == "upc_e" and len(d) == 8:
         d = expand_upc_e(d)
     if len(d) == 14 and d[0] == "0":
         d = d[1:]
     if len(d) in (8, 12):
         d = d.rjust(13, "0")
+    if not d.strip("0"):
+        return None
     return d if valid(d) else None

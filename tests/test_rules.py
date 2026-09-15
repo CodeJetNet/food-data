@@ -7,11 +7,14 @@ ROWS = [
     ("water", 0, 0, 0, 0, None, None, True),
     ("diet_soda_rounding", 1, 0, 0.2, 0, None, None, True),
     ("missing_energy", None, 10, 10, 10, None, None, False),
-    ("energy_too_high", 950, 0, 0, 100, None, None, False),
+    ("energy_too_high", 1000, 0, 0, 100, None, None, False),
+    ("pure_oil_label_rounded", 929, 0, 0, 100, None, None, True),     # 14 g x 9 rounds to 130 on the label, 929 per 100 g
     ("macros_dont_add_up", 100, 30, 30, 30, None, None, False),     # 510 kcal implied
     ("only_energy_known", 200, None, None, None, None, None, True),
     ("negative_protein", 100, -1, 20, 2, None, None, False),
     ("macros_over_100g", 400, 60, 60, 0, None, None, False),
+    ("label_rounded_scoop", 398, 90, 6, 5, None, None, True),         # whole-gram label values scaled up sum to 101
+    ("negative_fiber", 100, 5, 20, 1, -5, None, False),
     ("beer", 43, 0.5, 3.6, 0, 0, 3.9, True),                        # 16 kcal from macros, 27 from alcohol
     ("wheat_bran", 216, 15.5, 64.5, 4.25, 42.8, None, True),         # fiber at 4 kcal/g would imply 358
 ]
