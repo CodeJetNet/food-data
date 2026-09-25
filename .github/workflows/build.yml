@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 300
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,43 +27,16 @@ jobs:
       - run: echo "RELEASE_TAG=data-$(date -u +%Y%m%d)-${{ github.run_number }}" >> "$GITHUB_ENV"
       - run: pytest -q --ignore=tests/test_smoke.py
       - run: python community.py
-      - run: python build.py            # manifest URLs point at builds/$RELEASE_TAG on the CDN, mirrors at the release
-        env:
-          CDN_URL: ${{ vars.CDN_URL }}
+      - run: python build.py            # manifest URLs point at this tag's release assets, never `latest`
       - run: pytest -q tests/test_smoke.py
-      # Order matters: zips to the CDN, then the mirror, then the manifest last, so the manifest never names a missing file.
-      - name: Upload zips to R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      # A draft first, so `releases/latest` never points at a release whose assets are still uploading.
+      - name: Publish a GitHub Release
         run: |
-          aws s3 cp out/ "s3://food-data/builds/$RELEASE_TAG/" --recursive --exclude "*" --include "*.zip" \
-            --endpoint-url "$R2" --cache-control "public, max-age=31536000, immutable"
-      - name: Mirror to a GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$RELEASE_TAG" out/*.zip out/manifest.json --latest \
+          gh release create "$RELEASE_TAG" out/*.zip out/manifest.json --draft \
             --title "Food database $RELEASE_TAG" \
-            --notes "Mirror of the CDN build. Built from Open Food Facts (ODbL) and USDA FoodData Central (public domain). See manifest.json."
-      - name: Publish the manifest
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-        run: aws s3 cp out/manifest.json s3://food-data/manifest.json --endpoint-url "$R2" --cache-control "public, max-age=3600"
-      - name: Keep only the newest two builds on the CDN and in Releases
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          GH_TOKEN: ${{ github.token }}
+            --notes "Built from Open Food Facts (ODbL) and USDA FoodData Central (public domain). See manifest.json."
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+      - name: Keep only the newest two releases
         run: |
-          aws s3 ls s3://food-data/builds/ --endpoint-url "$R2" | awk '{print $2}' | sed 's#/$##' | sort -rV | tail -n +3 \
-            | xargs -r -I{} aws s3 rm "s3://food-data/builds/{}/" --recursive --endpoint-url "$R2"
           gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^data-' | sort -rV | tail -n +3 \
             | xargs -r -n1 gh release delete --yes --cleanup-tag

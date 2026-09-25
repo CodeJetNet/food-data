@@ -264,7 +264,7 @@ def main(argv: list[str]) -> None:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             z.write(db, db.name)
         files.append({"name": zip_path.name, "country": country, "bytes": zip_path.stat().st_size,
-                      "md5": md5(db), "url": f"{cdn_url()}/{zip_path.name}", "mirror": f"{mirror_url()}/{zip_path.name}"})
+                      "md5": md5(db), "url": f"{release_url()}/{zip_path.name}", "mirror": f"{release_url()}/{zip_path.name}"})
         print(country, db.stat().st_size >> 20, "MB db,", zip_path.stat().st_size >> 20, "MB zip", file=sys.stderr)
     (out / "manifest.json").write_text(json.dumps({
         "schemaVersion": SCHEMA_VERSION,
@@ -276,13 +276,10 @@ REPO = "https://github.com/codejetnet/food-data"
 TAG = os.environ.get("RELEASE_TAG", "local")
 
 
-def cdn_url() -> str:
-    """Cloudflare R2 behind a custom domain: free egress. Pinned to this build's tag, never `latest`."""
-    return f"{os.environ.get('CDN_URL', 'https://food.codejet.net')}/builds/{TAG}"
-
-
-def mirror_url() -> str:
-    """The GitHub Release for the same tag. Only a fallback: release bandwidth throttles at real adoption."""
+def release_url() -> str:
+    """This build's GitHub Release assets, pinned to the tag and never `latest`, so a client that downloads after
+    the next build still gets the file its manifest describes. Both manifest URLs point here; `mirror` keeps the
+    app's manifest schema and is where a second host goes if release bandwidth ever needs one."""
     return f"{REPO}/releases/download/{TAG}"
 
 

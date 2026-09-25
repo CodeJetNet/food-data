@@ -2,9 +2,8 @@
 
 Builds the food database for the calorie tracker app: one SQLite file per country
 (`foods-<CC>.zip`) plus a small `foods-starter.zip` the app ships with. The build
-runs in GitHub Actions with DuckDB and publishes the files to Cloudflare R2, with a
-GitHub Release as the mirror. `manifest.json` at the bucket root lists the current
-files.
+runs in GitHub Actions with DuckDB and publishes the files as assets of a GitHub
+Release. `manifest.json` on the latest release lists the current files.
 
 ## Sources
 
